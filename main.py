@@ -1,6 +1,6 @@
 from fastapi import Body, FastAPI, Response
 from fastapi.responses import JSONResponse
-
+import sqlite3
 
 # --------------------------------------------------
 # FastAPI Application
@@ -11,6 +11,41 @@ app = FastAPI(
     description="A simple in-memory CRUD API for managing tasks.",
     version="1.0",
 )
+
+DATABASE_NAME = "tasks.db"
+
+
+def initialize_database():
+    with sqlite3.connect(DATABASE_NAME) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+        row_count = connection.execute(
+            "SELECT COUNT(*) FROM tasks"
+        ).fetchone()[0]
+
+        if row_count == 0:
+            connection.executemany(
+                """
+                INSERT INTO tasks (title, done)
+                VALUES (?, ?)
+                """,
+                [
+                    ("Learn FastAPI basics", 0),
+                    ("Build CRUD API", 0),
+                    ("Test API endpoints", 1),
+                ],
+            )
+
+
+initialize_database()
 
 
 # --------------------------------------------------
