@@ -25,9 +25,8 @@ def get_connection():
     """
     Open a connection to the SQLite database.
 
-    sqlite3.Row allows us to access columns by name:
+    sqlite3.Row allows us to access columns using names:
     row["id"], row["title"], row["done"]
-    instead of row[0], row[1], row[2].
     """
     connection = sqlite3.connect(DATABASE_NAME)
     connection.row_factory = sqlite3.Row
@@ -36,8 +35,8 @@ def get_connection():
 
 def row_to_task(row):
     """
-    Convert a SQLite row into the same dictionary
-    structure used by our API.
+    Convert a SQLite row into the dictionary format
+    returned by the API.
     """
     return {
         "id": row["id"],
@@ -48,11 +47,15 @@ def row_to_task(row):
 
 def initialize_database():
     """
-    Create the database table if it does not exist
-    and seed three tasks only when the table is empty.
+    Create the tasks table if it does not already exist.
+
+    Insert the three example tasks only when
+    the table is completely empty.
     """
+
     with sqlite3.connect(DATABASE_NAME) as connection:
 
+        # Create the tasks table
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -63,10 +66,12 @@ def initialize_database():
             """
         )
 
+        # Count existing tasks
         row_count = connection.execute(
             "SELECT COUNT(*) FROM tasks"
         ).fetchone()[0]
 
+        # Seed only when database is empty
         if row_count == 0:
             connection.executemany(
                 """
@@ -81,7 +86,7 @@ def initialize_database():
             )
 
 
-# Initialize database when application loads
+# Initialize the database when application starts
 initialize_database()
 
 
@@ -89,11 +94,14 @@ initialize_database()
 # Temporary In-Memory Data
 # --------------------------------------------------
 #
-# Stage 1:
-# GET endpoints now use SQLite.
+# Stage 2 status:
 #
-# POST, PUT and DELETE still use this list temporarily.
-# We will migrate them to SQLite in Stages 2 and 3.
+# GET    -> SQLite
+# POST   -> SQLite
+# PUT    -> memory temporarily
+# DELETE -> memory temporarily
+#
+# This list will be removed in Stage 3.
 # --------------------------------------------------
 
 tasks = [
@@ -139,7 +147,9 @@ def root():
     description="Check whether the API server is running.",
 )
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok"
+    }
 
 
 # --------------------------------------------------
@@ -154,11 +164,15 @@ def health():
 def get_tasks():
 
     with get_connection() as connection:
+
         rows = connection.execute(
             "SELECT * FROM tasks"
         ).fetchall()
 
-    return [row_to_task(row) for row in rows]
+    return [
+        row_to_task(row)
+        for row in rows
+    ]
 
 
 # --------------------------------------------------
@@ -173,15 +187,23 @@ def get_tasks():
 def get_task(task_id: int):
 
     with get_connection() as connection:
+
         row = connection.execute(
-            "SELECT * FROM tasks WHERE id = ?",
+            """
+            SELECT *
+            FROM tasks
+            WHERE id = ?
+            """,
             (task_id,),
         ).fetchone()
 
+    # No matching task
     if row is None:
         return JSONResponse(
             status_code=404,
-            content={"error": "Task not found"},
+            content={
+                "error": "Task not found"
+            },
         )
 
     return row_to_task(row)
@@ -189,54 +211,80 @@ def get_task(task_id: int):
 
 # --------------------------------------------------
 # CREATE - Add New Task
-# Still in memory until Stage 2
+# SQLite-backed
 # --------------------------------------------------
 
 @app.post(
     "/tasks",
     status_code=201,
-    description="Create a new task with a non-empty title.",
+    description="Create a new task in the SQLite database.",
 )
-def create_task(payload: dict | None = Body(default=None)):
+def create_task(
+    payload: dict | None = Body(default=None),
+):
 
-    # Check whether a request body was provided
+    # ----------------------------------------------
+    # Validate request body
+    # ----------------------------------------------
+
     if payload is None:
         return JSONResponse(
             status_code=400,
-            content={"error": "Title is required"},
+            content={
+                "error": "Title is required"
+            },
         )
 
-    # Safely get the title
+    # Get title safely
     title = payload.get("title")
 
-    # Validate title
+    # Title must be a non-empty string
     if not isinstance(title, str) or not title.strip():
         return JSONResponse(
             status_code=400,
-            content={"error": "Title is required and cannot be empty"},
+            content={
+                "error": "Title is required and cannot be empty"
+            },
         )
 
-    # Generate next ID
-    next_id = max(
-        (task["id"] for task in tasks),
-        default=0,
-    ) + 1
+    # Remove unnecessary spaces
+    clean_title = title.strip()
 
-    new_task = {
-        "id": next_id,
-        "title": title.strip(),
+    # ----------------------------------------------
+    # Insert task into SQLite
+    # ----------------------------------------------
+
+    with get_connection() as connection:
+
+        cursor = connection.execute(
+            """
+            INSERT INTO tasks (title, done)
+            VALUES (?, ?)
+            """,
+            (
+                clean_title,
+                0,
+            ),
+        )
+
+        # SQLite generated the ID for us
+        new_task_id = cursor.lastrowid
+
+    # ----------------------------------------------
+    # Return the created task
+    # ----------------------------------------------
+
+    return {
+        "id": new_task_id,
+        "title": clean_title,
         "done": False,
     }
-
-    # Temporary in-memory storage
-    tasks.append(new_task)
-
-    return new_task
 
 
 # --------------------------------------------------
 # UPDATE - Update Existing Task
-# Still in memory until Stage 3
+# TEMPORARILY still in memory
+# Will move to SQLite in Stage 3
 # --------------------------------------------------
 
 @app.put(
@@ -248,40 +296,66 @@ def update_task(
     payload: dict | None = Body(default=None),
 ):
 
+    # Body must contain something
     if payload is None or not payload:
         return JSONResponse(
             status_code=400,
-            content={"error": "At least one field is required"},
+            content={
+                "error": "At least one field is required"
+            },
         )
 
+    # Check which fields were provided
     has_title = "title" in payload
     has_done = "done" in payload
 
+    # Must provide title and/or done
     if not has_title and not has_done:
         return JSONResponse(
             status_code=400,
-            content={"error": "Provide title and/or done"},
+            content={
+                "error": "Provide title and/or done"
+            },
         )
 
+    # ----------------------------------------------
+    # Validate title
+    # ----------------------------------------------
+
     if has_title:
+
         title = payload["title"]
 
         if not isinstance(title, str) or not title.strip():
             return JSONResponse(
                 status_code=400,
-                content={"error": "Title must be a non-empty string"},
+                content={
+                    "error": "Title must be a non-empty string"
+                },
             )
 
+    # ----------------------------------------------
+    # Validate done
+    # ----------------------------------------------
+
     if has_done:
+
         done = payload["done"]
 
         if not isinstance(done, bool):
             return JSONResponse(
                 status_code=400,
-                content={"error": "Done must be true or false"},
+                content={
+                    "error": "Done must be true or false"
+                },
             )
 
+    # ----------------------------------------------
+    # Temporary in-memory update
+    # ----------------------------------------------
+
     for task in tasks:
+
         if task["id"] == task_id:
 
             if has_title:
@@ -292,15 +366,19 @@ def update_task(
 
             return task
 
+    # Task does not exist
     return JSONResponse(
         status_code=404,
-        content={"error": f"Task {task_id} not found"},
+        content={
+            "error": f"Task {task_id} not found"
+        },
     )
 
 
 # --------------------------------------------------
 # DELETE - Delete Existing Task
-# Still in memory until Stage 3
+# TEMPORARILY still in memory
+# Will move to SQLite in Stage 3
 # --------------------------------------------------
 
 @app.delete(
@@ -309,16 +387,25 @@ def update_task(
 )
 def delete_task(task_id: int):
 
+    # enumerate gives:
+    # index -> position in the list
+    # task  -> task dictionary
+
     for index, task in enumerate(tasks):
 
         if task["id"] == task_id:
 
+            # Remove from temporary Python list
             tasks.pop(index)
 
-            # HTTP 204 must have no response body
-            return Response(status_code=204)
+            # HTTP 204 must have an empty body
+            return Response(
+                status_code=204
+            )
 
     return JSONResponse(
         status_code=404,
-        content={"error": f"Task {task_id} not found"},
+        content={
+            "error": f"Task {task_id} not found"
+        },
     )
