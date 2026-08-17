@@ -2,21 +2,57 @@ from fastapi import Body, FastAPI, Response
 from fastapi.responses import JSONResponse
 import sqlite3
 
+
 # --------------------------------------------------
 # FastAPI Application
 # --------------------------------------------------
 
 app = FastAPI(
     title="Task API",
-    description="A simple in-memory CRUD API for managing tasks.",
+    description="A simple CRUD API for managing tasks.",
     version="1.0",
 )
+
+
+# --------------------------------------------------
+# Database Configuration
+# --------------------------------------------------
 
 DATABASE_NAME = "tasks.db"
 
 
+def get_connection():
+    """
+    Open a connection to the SQLite database.
+
+    sqlite3.Row allows us to access columns by name:
+    row["id"], row["title"], row["done"]
+    instead of row[0], row[1], row[2].
+    """
+    connection = sqlite3.connect(DATABASE_NAME)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def row_to_task(row):
+    """
+    Convert a SQLite row into the same dictionary
+    structure used by our API.
+    """
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "done": bool(row["done"]),
+    }
+
+
 def initialize_database():
+    """
+    Create the database table if it does not exist
+    and seed three tasks only when the table is empty.
+    """
     with sqlite3.connect(DATABASE_NAME) as connection:
+
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -45,11 +81,19 @@ def initialize_database():
             )
 
 
+# Initialize database when application loads
 initialize_database()
 
 
 # --------------------------------------------------
-# In-Memory Data
+# Temporary In-Memory Data
+# --------------------------------------------------
+#
+# Stage 1:
+# GET endpoints now use SQLite.
+#
+# POST, PUT and DELETE still use this list temporarily.
+# We will migrate them to SQLite in Stages 2 and 3.
 # --------------------------------------------------
 
 tasks = [
@@ -77,13 +121,12 @@ tasks = [
 
 @app.get(
     "/",
-    description="Return basic information about the Task API.",
+    description="Return basic information about the API.",
 )
 def root():
     return {
         "name": "Task API",
         "version": "1.0",
-        "endpoints": ["/tasks"],
     }
 
 
@@ -101,18 +144,52 @@ def health():
 
 # --------------------------------------------------
 # READ - Get All Tasks
+# SQLite-backed
 # --------------------------------------------------
 
 @app.get(
     "/tasks",
-    description="Return all tasks currently stored in memory.",
+    description="Return all tasks stored in the SQLite database.",
 )
 def get_tasks():
-    return tasks
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM tasks"
+        ).fetchall()
+
+    return [row_to_task(row) for row in rows]
+
+
+# --------------------------------------------------
+# READ - Get One Task
+# SQLite-backed
+# --------------------------------------------------
+
+@app.get(
+    "/tasks/{task_id}",
+    description="Return a single task by its ID.",
+)
+def get_task(task_id: int):
+
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+
+    if row is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Task not found"},
+        )
+
+    return row_to_task(row)
 
 
 # --------------------------------------------------
 # CREATE - Add New Task
+# Still in memory until Stage 2
 # --------------------------------------------------
 
 @app.post(
@@ -129,57 +206,37 @@ def create_task(payload: dict | None = Body(default=None)):
             content={"error": "Title is required"},
         )
 
-    # Safely get the title from the request body
+    # Safely get the title
     title = payload.get("title")
 
-    # Validate the title
+    # Validate title
     if not isinstance(title, str) or not title.strip():
         return JSONResponse(
             status_code=400,
             content={"error": "Title is required and cannot be empty"},
         )
 
-    # Generate the next task ID
+    # Generate next ID
     next_id = max(
         (task["id"] for task in tasks),
         default=0,
     ) + 1
 
-    # Create the new task
     new_task = {
         "id": next_id,
         "title": title.strip(),
         "done": False,
     }
 
-    # Store it in memory
+    # Temporary in-memory storage
     tasks.append(new_task)
 
     return new_task
 
 
 # --------------------------------------------------
-# READ - Get One Task
-# --------------------------------------------------
-
-@app.get(
-    "/tasks/{task_id}",
-    description="Return a single task by its ID.",
-)
-def get_task(task_id: int):
-
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-
-    return JSONResponse(
-        status_code=404,
-        content={"error": f"Task {task_id} not found"},
-    )
-
-
-# --------------------------------------------------
 # UPDATE - Update Existing Task
+# Still in memory until Stage 3
 # --------------------------------------------------
 
 @app.put(
@@ -191,25 +248,21 @@ def update_task(
     payload: dict | None = Body(default=None),
 ):
 
-    # Body must contain something
     if payload is None or not payload:
         return JSONResponse(
             status_code=400,
             content={"error": "At least one field is required"},
         )
 
-    # Check which fields were provided
     has_title = "title" in payload
     has_done = "done" in payload
 
-    # At least title or done must be present
     if not has_title and not has_done:
         return JSONResponse(
             status_code=400,
             content={"error": "Provide title and/or done"},
         )
 
-    # Validate title if provided
     if has_title:
         title = payload["title"]
 
@@ -219,7 +272,6 @@ def update_task(
                 content={"error": "Title must be a non-empty string"},
             )
 
-    # Validate done if provided
     if has_done:
         done = payload["done"]
 
@@ -229,7 +281,6 @@ def update_task(
                 content={"error": "Done must be true or false"},
             )
 
-    # Find and update the task
     for task in tasks:
         if task["id"] == task_id:
 
@@ -241,7 +292,6 @@ def update_task(
 
             return task
 
-    # Task does not exist
     return JSONResponse(
         status_code=404,
         content={"error": f"Task {task_id} not found"},
@@ -250,6 +300,7 @@ def update_task(
 
 # --------------------------------------------------
 # DELETE - Delete Existing Task
+# Still in memory until Stage 3
 # --------------------------------------------------
 
 @app.delete(
@@ -258,17 +309,13 @@ def update_task(
 )
 def delete_task(task_id: int):
 
-    # enumerate gives both:
-    # index -> location in the list
-    # task  -> actual task dictionary
     for index, task in enumerate(tasks):
 
         if task["id"] == task_id:
 
-            # Remove task from the list
             tasks.pop(index)
 
-            # 204 must have an empty response body
+            # HTTP 204 must have no response body
             return Response(status_code=204)
 
     return JSONResponse(
