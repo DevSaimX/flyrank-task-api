@@ -100,27 +100,8 @@ initialize_database()
 # POST   -> SQLite
 # PUT    -> memory temporarily
 # DELETE -> memory temporarily
-#
-# This list will be removed in Stage 3.
-# --------------------------------------------------
 
-tasks = [
-    {
-        "id": 1,
-        "title": "Learn FastAPI basics",
-        "done": False,
-    },
-    {
-        "id": 2,
-        "title": "Build CRUD API",
-        "done": False,
-    },
-    {
-        "id": 3,
-        "title": "Test API endpoints",
-        "done": True,
-    },
-]
+
 
 
 # --------------------------------------------------
@@ -283,8 +264,7 @@ def create_task(
 
 # --------------------------------------------------
 # UPDATE - Update Existing Task
-# TEMPORARILY still in memory
-# Will move to SQLite in Stage 3
+# SQLite-backed
 # --------------------------------------------------
 
 @app.put(
@@ -309,7 +289,7 @@ def update_task(
     has_title = "title" in payload
     has_done = "done" in payload
 
-    # Must provide title and/or done
+    # Must contain title and/or done
     if not has_title and not has_done:
         return JSONResponse(
             status_code=400,
@@ -317,6 +297,90 @@ def update_task(
                 "error": "Provide title and/or done"
             },
         )
+
+    # Validate title
+    if has_title:
+        title = payload["title"]
+
+        if not isinstance(title, str) or not title.strip():
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Title must be a non-empty string"
+                },
+            )
+
+    # Validate done
+    if has_done:
+        done = payload["done"]
+
+        if not isinstance(done, bool):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Done must be true or false"
+                },
+            )
+
+    with get_connection() as connection:
+
+        # First get the existing task
+        existing_row = connection.execute(
+            """
+            SELECT *
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+
+        # Unknown task
+        if existing_row is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": f"Task {task_id} not found"
+                },
+            )
+
+        # Keep existing values if field was not provided
+        new_title = (
+            payload["title"].strip()
+            if has_title
+            else existing_row["title"]
+        )
+
+        if has_done:
+            new_done = 1 if payload["done"] else 0
+        else:
+            new_done = existing_row["done"]
+
+        # Update the database row
+        connection.execute(
+            """
+            UPDATE tasks
+            SET title = ?, done = ?
+            WHERE id = ?
+            """,
+            (
+                new_title,
+                new_done,
+                task_id,
+            ),
+        )
+
+        # Read the updated task
+        updated_row = connection.execute(
+            """
+            SELECT *
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+
+    return row_to_task(updated_row)
+
 
     # ----------------------------------------------
     # Validate title
@@ -377,8 +441,7 @@ def update_task(
 
 # --------------------------------------------------
 # DELETE - Delete Existing Task
-# TEMPORARILY still in memory
-# Will move to SQLite in Stage 3
+# SQLite-backed
 # --------------------------------------------------
 
 @app.delete(
@@ -387,25 +450,34 @@ def update_task(
 )
 def delete_task(task_id: int):
 
-    # enumerate gives:
-    # index -> position in the list
-    # task  -> task dictionary
+    with get_connection() as connection:
 
-    for index, task in enumerate(tasks):
+        # Check whether task exists
+        existing_row = connection.execute(
+            """
+            SELECT *
+            FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        ).fetchone()
 
-        if task["id"] == task_id:
-
-            # Remove from temporary Python list
-            tasks.pop(index)
-
-            # HTTP 204 must have an empty body
-            return Response(
-                status_code=204
+        if existing_row is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": f"Task {task_id} not found"
+                },
             )
 
-    return JSONResponse(
-        status_code=404,
-        content={
-            "error": f"Task {task_id} not found"
-        },
-    )
+        # Delete the task
+        connection.execute(
+            """
+            DELETE FROM tasks
+            WHERE id = ?
+            """,
+            (task_id,),
+        )
+
+    # 204 responses must not contain a body
+    return Response(status_code=204)
