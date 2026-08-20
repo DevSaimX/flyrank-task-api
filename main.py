@@ -1,6 +1,6 @@
 from fastapi import Body, FastAPI, Response
 from fastapi.responses import JSONResponse
-
+from auth_client import supabase
 import repository
 
 
