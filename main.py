@@ -1,117 +1,25 @@
 from fastapi import Body, FastAPI, Response
 from fastapi.responses import JSONResponse
-import sqlite3
 
+import repository
 
-# --------------------------------------------------
-# FastAPI Application
-# --------------------------------------------------
 
 app = FastAPI(
     title="Task API",
-    description="A simple CRUD API for managing tasks.",
+    description="A CRUD Task API backed by PostgreSQL.",
     version="1.0",
 )
 
 
-# --------------------------------------------------
-# Database Configuration
-# --------------------------------------------------
-
-DATABASE_NAME = "tasks.db"
-
-
-def get_connection():
-    """
-    Open a connection to the SQLite database.
-
-    sqlite3.Row allows us to access columns using names:
-    row["id"], row["title"], row["done"]
-    """
-    connection = sqlite3.connect(DATABASE_NAME)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def row_to_task(row):
-    """
-    Convert a SQLite row into the dictionary format
-    returned by the API.
-    """
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "done": bool(row["done"]),
-    }
-
-
-def initialize_database():
-    """
-    Create the tasks table if it does not already exist.
-
-    Insert the three example tasks only when
-    the table is completely empty.
-    """
-
-    with sqlite3.connect(DATABASE_NAME) as connection:
-
-        # Create the tasks table
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY,
-                title TEXT NOT NULL,
-                done INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-
-        # Count existing tasks
-        row_count = connection.execute(
-            "SELECT COUNT(*) FROM tasks"
-        ).fetchone()[0]
-
-        # Seed only when database is empty
-        if row_count == 0:
-            connection.executemany(
-                """
-                INSERT INTO tasks (title, done)
-                VALUES (?, ?)
-                """,
-                [
-                    ("Learn FastAPI basics", 0),
-                    ("Build CRUD API", 0),
-                    ("Test API endpoints", 1),
-                ],
-            )
-
-
-# Initialize the database when application starts
-initialize_database()
+# Create table and seed data
+repository.initialize_database()
 
 
 # --------------------------------------------------
-# Temporary In-Memory Data
-# --------------------------------------------------
-#
-# Stage 2 status:
-#
-# GET    -> SQLite
-# POST   -> SQLite
-# PUT    -> memory temporarily
-# DELETE -> memory temporarily
-
-
-
-
-# --------------------------------------------------
-# Root Endpoint
+# Root
 # --------------------------------------------------
 
-@app.get(
-    "/",
-    description="Return basic information about the API.",
-)
+@app.get("/")
 def root():
     return {
         "name": "Task API",
@@ -120,13 +28,10 @@ def root():
 
 
 # --------------------------------------------------
-# Health Check
+# Health
 # --------------------------------------------------
 
-@app.get(
-    "/health",
-    description="Check whether the API server is running.",
-)
+@app.get("/health")
 def health():
     return {
         "status": "ok"
@@ -134,52 +39,24 @@ def health():
 
 
 # --------------------------------------------------
-# READ - Get All Tasks
-# SQLite-backed
+# READ ALL
 # --------------------------------------------------
 
-@app.get(
-    "/tasks",
-    description="Return all tasks stored in the SQLite database.",
-)
+@app.get("/tasks")
 def get_tasks():
-
-    with get_connection() as connection:
-
-        rows = connection.execute(
-            "SELECT * FROM tasks"
-        ).fetchall()
-
-    return [
-        row_to_task(row)
-        for row in rows
-    ]
+    return repository.get_all_tasks()
 
 
 # --------------------------------------------------
-# READ - Get One Task
-# SQLite-backed
+# READ ONE
 # --------------------------------------------------
 
-@app.get(
-    "/tasks/{task_id}",
-    description="Return a single task by its ID.",
-)
+@app.get("/tasks/{task_id}")
 def get_task(task_id: int):
 
-    with get_connection() as connection:
+    task = repository.get_task(task_id)
 
-        row = connection.execute(
-            """
-            SELECT *
-            FROM tasks
-            WHERE id = ?
-            """,
-            (task_id,),
-        ).fetchone()
-
-    # No matching task
-    if row is None:
+    if task is None:
         return JSONResponse(
             status_code=404,
             content={
@@ -187,26 +64,20 @@ def get_task(task_id: int):
             },
         )
 
-    return row_to_task(row)
+    return task
 
 
 # --------------------------------------------------
-# CREATE - Add New Task
-# SQLite-backed
+# CREATE
 # --------------------------------------------------
 
 @app.post(
     "/tasks",
     status_code=201,
-    description="Create a new task in the SQLite database.",
 )
 def create_task(
     payload: dict | None = Body(default=None),
 ):
-
-    # ----------------------------------------------
-    # Validate request body
-    # ----------------------------------------------
 
     if payload is None:
         return JSONResponse(
@@ -216,10 +87,8 @@ def create_task(
             },
         )
 
-    # Get title safely
     title = payload.get("title")
 
-    # Title must be a non-empty string
     if not isinstance(title, str) or not title.strip():
         return JSONResponse(
             status_code=400,
@@ -228,55 +97,21 @@ def create_task(
             },
         )
 
-    # Remove unnecessary spaces
-    clean_title = title.strip()
-
-    # ----------------------------------------------
-    # Insert task into SQLite
-    # ----------------------------------------------
-
-    with get_connection() as connection:
-
-        cursor = connection.execute(
-            """
-            INSERT INTO tasks (title, done)
-            VALUES (?, ?)
-            """,
-            (
-                clean_title,
-                0,
-            ),
-        )
-
-        # SQLite generated the ID for us
-        new_task_id = cursor.lastrowid
-
-    # ----------------------------------------------
-    # Return the created task
-    # ----------------------------------------------
-
-    return {
-        "id": new_task_id,
-        "title": clean_title,
-        "done": False,
-    }
+    return repository.create_task(
+        title.strip()
+    )
 
 
 # --------------------------------------------------
-# UPDATE - Update Existing Task
-# SQLite-backed
+# UPDATE
 # --------------------------------------------------
 
-@app.put(
-    "/tasks/{task_id}",
-    description="Update the title and/or completion status of a task.",
-)
+@app.put("/tasks/{task_id}")
 def update_task(
     task_id: int,
     payload: dict | None = Body(default=None),
 ):
 
-    # Body must contain something
     if payload is None or not payload:
         return JSONResponse(
             status_code=400,
@@ -285,11 +120,9 @@ def update_task(
             },
         )
 
-    # Check which fields were provided
     has_title = "title" in payload
     has_done = "done" in payload
 
-    # Must contain title and/or done
     if not has_title and not has_done:
         return JSONResponse(
             status_code=400,
@@ -298,7 +131,9 @@ def update_task(
             },
         )
 
-    # Validate title
+    title = None
+    done = None
+
     if has_title:
         title = payload["title"]
 
@@ -310,7 +145,8 @@ def update_task(
                 },
             )
 
-    # Validate done
+        title = title.strip()
+
     if has_done:
         done = payload["done"]
 
@@ -322,162 +158,38 @@ def update_task(
                 },
             )
 
-    with get_connection() as connection:
-
-        # First get the existing task
-        existing_row = connection.execute(
-            """
-            SELECT *
-            FROM tasks
-            WHERE id = ?
-            """,
-            (task_id,),
-        ).fetchone()
-
-        # Unknown task
-        if existing_row is None:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": f"Task {task_id} not found"
-                },
-            )
-
-        # Keep existing values if field was not provided
-        new_title = (
-            payload["title"].strip()
-            if has_title
-            else existing_row["title"]
-        )
-
-        if has_done:
-            new_done = 1 if payload["done"] else 0
-        else:
-            new_done = existing_row["done"]
-
-        # Update the database row
-        connection.execute(
-            """
-            UPDATE tasks
-            SET title = ?, done = ?
-            WHERE id = ?
-            """,
-            (
-                new_title,
-                new_done,
-                task_id,
-            ),
-        )
-
-        # Read the updated task
-        updated_row = connection.execute(
-            """
-            SELECT *
-            FROM tasks
-            WHERE id = ?
-            """,
-            (task_id,),
-        ).fetchone()
-
-    return row_to_task(updated_row)
-
-
-    # ----------------------------------------------
-    # Validate title
-    # ----------------------------------------------
-
-    if has_title:
-
-        title = payload["title"]
-
-        if not isinstance(title, str) or not title.strip():
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "Title must be a non-empty string"
-                },
-            )
-
-    # ----------------------------------------------
-    # Validate done
-    # ----------------------------------------------
-
-    if has_done:
-
-        done = payload["done"]
-
-        if not isinstance(done, bool):
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "Done must be true or false"
-                },
-            )
-
-    # ----------------------------------------------
-    # Temporary in-memory update
-    # ----------------------------------------------
-
-    for task in tasks:
-
-        if task["id"] == task_id:
-
-            if has_title:
-                task["title"] = payload["title"].strip()
-
-            if has_done:
-                task["done"] = payload["done"]
-
-            return task
-
-    # Task does not exist
-    return JSONResponse(
-        status_code=404,
-        content={
-            "error": f"Task {task_id} not found"
-        },
+    updated_task = repository.update_task(
+        task_id,
+        title=title,
+        done=done,
     )
 
-
-# --------------------------------------------------
-# DELETE - Delete Existing Task
-# SQLite-backed
-# --------------------------------------------------
-
-@app.delete(
-    "/tasks/{task_id}",
-    description="Delete a task by its ID.",
-)
-def delete_task(task_id: int):
-
-    with get_connection() as connection:
-
-        # Check whether task exists
-        existing_row = connection.execute(
-            """
-            SELECT *
-            FROM tasks
-            WHERE id = ?
-            """,
-            (task_id,),
-        ).fetchone()
-
-        if existing_row is None:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": f"Task {task_id} not found"
-                },
-            )
-
-        # Delete the task
-        connection.execute(
-            """
-            DELETE FROM tasks
-            WHERE id = ?
-            """,
-            (task_id,),
+    if updated_task is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"Task {task_id} not found"
+            },
         )
 
-    # 204 responses must not contain a body
+    return updated_task
+
+
+# --------------------------------------------------
+# DELETE
+# --------------------------------------------------
+
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: int):
+
+    deleted = repository.delete_task(task_id)
+
+    if not deleted:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"Task {task_id} not found"
+            },
+        )
+
     return Response(status_code=204)
