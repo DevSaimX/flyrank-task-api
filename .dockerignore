@@ -1,0 +1,7 @@
+.venu
+__pycache__
+*.pyc
+.env
+.git
+tasks.db
+docs
