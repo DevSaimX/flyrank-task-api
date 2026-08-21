@@ -1,4 +1,4 @@
-from fastapi import Body, FastAPI, Response
+from fastapi import Body, FastAPI, Header, Response
 from fastapi.responses import JSONResponse
 
 from auth_client import supabase
@@ -130,6 +130,51 @@ def login(payload: dict | None = Body(default=None)):
             content={"error": "Invalid login credentials"},
         )
 
+
+# --------------------------------------------------
+# PUBLIC
+# --------------------------------------------------
+
+@app.get("/public/info")
+def public_info():
+    return {
+        "message": "Welcome stranger! This info is public."
+    }
+
+
+# --------------------------------------------------
+# PROTECTED - Stage 2
+# Token presence only, not verification yet
+# --------------------------------------------------
+
+@app.get("/protected/profile")
+def protected_profile(
+    authorization: str | None = Header(default=None),
+):
+
+    if not authorization:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Access token required"},
+        )
+
+    if not authorization.startswith("Bearer "):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Access token required"},
+        )
+
+    token = authorization.removeprefix("Bearer ").strip()
+
+    if not token:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Access token required"},
+        )
+
+    return {
+        "message": "Access token received"
+    }
 
 @app.get("/")
 def root():
