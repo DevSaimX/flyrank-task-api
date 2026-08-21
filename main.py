@@ -1,5 +1,6 @@
 from fastapi import Body, FastAPI, Response
 from fastapi.responses import JSONResponse
+
 from auth_client import supabase
 import repository
 
@@ -18,6 +19,117 @@ repository.initialize_database()
 # --------------------------------------------------
 # Root
 # --------------------------------------------------
+
+# --------------------------------------------------
+# AUTH - Sign Up
+# --------------------------------------------------
+
+@app.post("/auth/signup", status_code=201)
+def signup(payload: dict | None = Body(default=None)):
+
+    if payload is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email and password are required"},
+        )
+
+    email = payload.get("email")
+    password = payload.get("password")
+
+    if not isinstance(email, str) or not email.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email is required"},
+        )
+
+    if not isinstance(password, str) or not password.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Password is required"},
+        )
+
+    try:
+        response = supabase.auth.sign_up(
+            {
+                "email": email.strip(),
+                "password": password,
+            }
+        )
+
+        if response.user is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Unable to create user"},
+            )
+
+        return {
+            "user": {
+                "id": str(response.user.id),
+                "email": response.user.email,
+                "created_at": str(response.user.created_at),
+            }
+        }
+
+    except Exception as error:
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(error)},
+        )
+
+
+# --------------------------------------------------
+# AUTH - Log In
+# --------------------------------------------------
+
+@app.post("/auth/login")
+def login(payload: dict | None = Body(default=None)):
+
+    if payload is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email and password are required"},
+        )
+
+    email = payload.get("email")
+    password = payload.get("password")
+
+    if not isinstance(email, str) or not email.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email is required"},
+        )
+
+    if not isinstance(password, str) or not password:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Password is required"},
+        )
+
+    try:
+        response = supabase.auth.sign_in_with_password(
+            {
+                "email": email.strip(),
+                "password": password,
+            }
+        )
+
+        if response.session is None:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid login credentials"},
+            )
+
+        return {
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+        }
+
+    except Exception:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid login credentials"},
+        )
+
 
 @app.get("/")
 def root():
@@ -193,3 +305,5 @@ def delete_task(task_id: int):
         )
 
     return Response(status_code=204)
+
+
