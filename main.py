@@ -143,8 +143,8 @@ def public_info():
 
 
 # --------------------------------------------------
-# PROTECTED - Stage 2
-# Token presence only, not verification yet
+# PROTECTED - Profile
+# Verified with Supabase
 # --------------------------------------------------
 
 @app.get("/protected/profile")
@@ -172,9 +172,27 @@ def protected_profile(
             content={"error": "Access token required"},
         )
 
-    return {
-        "message": "Access token received"
-    }
+    try:
+        response = supabase.auth.get_user(token)
+        user = response.user
+
+        if user is None:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid or expired token"},
+            )
+
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "created_at": str(user.created_at),
+        }
+
+    except Exception:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid or expired token"},
+        )
 
 @app.get("/")
 def root():
