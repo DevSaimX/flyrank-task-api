@@ -1,9 +1,9 @@
-from fastapi import Body, FastAPI, Header, Response
+from fastapi import Body, Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from auth_client import supabase
 import repository
-
 
 app = FastAPI(
     title="Task API",
@@ -11,7 +11,62 @@ app = FastAPI(
     version="1.0",
 )
 
+# --------------------------------------------------
+# Authentication Security
+# --------------------------------------------------
 
+security = HTTPBearer(auto_error=False)
+
+
+class AuthError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
+@app.exception_handler(AuthError)
+async def auth_error_handler(
+    request: Request,
+    exc: AuthError,
+):
+    return JSONResponse(
+        status_code=401,
+        content={"error": exc.message},
+    )
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    # No Authorization header / malformed Bearer header
+    if credentials is None:
+        raise AuthError("Access token required")
+
+    if credentials.scheme.lower() != "bearer":
+        raise AuthError("Access token required")
+
+    token = credentials.credentials.strip()
+
+    if not token:
+        raise AuthError("Access token required")
+
+    # Verify token with Supabase
+    try:
+        response = supabase.auth.get_user(token)
+        user = response.user
+
+        if user is None:
+            raise AuthError("Invalid or expired token")
+
+    except AuthError:
+        raise
+
+    except Exception:
+        raise AuthError("Invalid or expired token")
+
+    return {
+        "user": user,
+        "token": token,
+    }
 # Create table and seed data
 repository.initialize_database()
 
@@ -130,7 +185,27 @@ def login(payload: dict | None = Body(default=None)):
             content={"error": "Invalid login credentials"},
         )
 
+# --------------------------------------------------
+# AUTH - Logout
+# --------------------------------------------------
 
+@app.post(
+    "/auth/logout",
+    status_code=204,
+)
+def logout(
+    auth=Depends(get_current_user),
+):
+    try:
+        supabase.auth.sign_out()
+
+        return Response(status_code=204)
+
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Unable to log out"},
+        )
 # --------------------------------------------------
 # PUBLIC
 # --------------------------------------------------
@@ -147,52 +222,37 @@ def public_info():
 # Verified with Supabase
 # --------------------------------------------------
 
+# --------------------------------------------------
+# PROTECTED - Profile
+# --------------------------------------------------
+
 @app.get("/protected/profile")
 def protected_profile(
-    authorization: str | None = Header(default=None),
+    auth=Depends(get_current_user),
 ):
+    user = auth["user"]
 
-    if not authorization:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Access token required"},
-        )
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "created_at": str(user.created_at),
+    }
 
-    if not authorization.startswith("Bearer "):
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Access token required"},
-        )
+# --------------------------------------------------
+# PROTECTED - Dashboard
+# --------------------------------------------------
 
-    token = authorization.removeprefix("Bearer ").strip()
+@app.get("/protected/dashboard")
+def protected_dashboard(
+    auth=Depends(get_current_user),
+):
+    user = auth["user"]
 
-    if not token:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Access token required"},
-        )
-
-    try:
-        response = supabase.auth.get_user(token)
-        user = response.user
-
-        if user is None:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Invalid or expired token"},
-            )
-
-        return {
-            "id": str(user.id),
-            "email": user.email,
-            "created_at": str(user.created_at),
-        }
-
-    except Exception:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Invalid or expired token"},
-        )
+    return {
+        "message": "Welcome to your protected dashboard",
+        "user_id": str(user.id),
+        "email": user.email,
+    }
 
 @app.get("/")
 def root():
